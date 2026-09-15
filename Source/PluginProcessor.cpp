@@ -17,9 +17,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout KickBassSpaceAudioProcessor:
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // Etapa 1: solo parámetros de análisis (tiempos del detector de envolvente).
-    // Los controles SPACE / CHARACTER / KICK PRIORITY llegan en etapas posteriores,
-    // cuando exista DSP real que controlar.
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "attackMs", "Attack", juce::NormalisableRange<float> (0.1f, 50.0f, 0.01f, 0.4f), 3.0f));
 
@@ -34,8 +31,10 @@ void KickBassSpaceAudioProcessor::prepareToPlay (double sampleRate, int samplesP
     juce::ignoreUnused (samplesPerBlock);
     currentSampleRate = sampleRate;
 
-    kickEnvelope.prepare (sampleRate);
-    bassEnvelope.prepare (sampleRate);
+    kickOverallEnvelope.prepare (sampleRate);
+    bassOverallEnvelope.prepare (sampleRate);
+    kickAnalyzer.prepare (sampleRate);
+    bassAnalyzer.prepare (sampleRate);
 
     samplesPerHistoryPoint = juce::jmax (1, (int) (sampleRate / historyRateHz));
     samplesUntilNextHistoryPoint = samplesPerHistoryPoint;
@@ -48,7 +47,6 @@ void KickBassSpaceAudioProcessor::releaseResources() {}
 
 bool KickBassSpaceAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    // El bus principal (kick) y el de salida deben ser mono o estereo, y coincidir.
     auto mainIn = layouts.getChannelSet (true, 0);
     auto mainOut = layouts.getChannelSet (false, 0);
 
@@ -57,7 +55,6 @@ bool KickBassSpaceAudioProcessor::isBusesLayoutSupported (const BusesLayout& lay
     if (mainIn != mainOut)
         return false;
 
-    // El bus de sidechain (bass) puede estar desconectado (disabled) o ser mono/estereo
     auto sideIn = layouts.getChannelSet (true, 1);
     if (! sideIn.isDisabled() && sideIn != juce::AudioChannelSet::mono() && sideIn != juce::AudioChannelSet::stereo())
         return false;
@@ -78,22 +75,24 @@ void KickBassSpaceAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
     float attackMs = apvts.getRawParameterValue ("attackMs")->load();
     float releaseMs = apvts.getRawParameterValue ("releaseMs")->load();
-    kickEnvelope.setAttackTimeMs (attackMs);
-    kickEnvelope.setReleaseTimeMs (releaseMs);
-    bassEnvelope.setAttackTimeMs (attackMs);
-    bassEnvelope.setReleaseTimeMs (releaseMs);
+    kickOverallEnvelope.setAttackTimeMs (attackMs);
+    kickOverallEnvelope.setReleaseTimeMs (releaseMs);
+    bassOverallEnvelope.setAttackTimeMs (attackMs);
+    bassOverallEnvelope.setReleaseTimeMs (releaseMs);
+    kickAnalyzer.setAttackReleaseMs (attackMs, releaseMs);
+    bassAnalyzer.setAttackReleaseMs (attackMs, releaseMs);
+
+    constexpr float conflictThreshold = 0.02f;
 
     float sidechainActivityThisBlock = 0.0f;
 
     for (int i = 0; i < numSamples; ++i)
     {
-        // Kick: suma simple de canales del bus principal (mono-sum para análisis)
         float kickSample = 0.0f;
         for (int ch = 0; ch < numMainChannels; ++ch)
             kickSample += mainBlock.getSample (ch, i);
         if (numMainChannels > 0) kickSample /= (float) numMainChannels;
 
-        // Bass: mono-sum del bus de sidechain (si existe)
         float bassSample = 0.0f;
         for (int ch = 0; ch < numSideChannels; ++ch)
             bassSample += sideBlock.getSample (ch, i);
@@ -101,29 +100,41 @@ void KickBassSpaceAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
         sidechainActivityThisBlock = juce::jmax (sidechainActivityThisBlock, std::abs (bassSample));
 
-        auto kickEnv = kickEnvelope.processSample (kickSample);
-        auto bassEnv = bassEnvelope.processSample (bassSample);
+        auto kickEnvOverall = kickOverallEnvelope.processSample (kickSample);
+        auto bassEnvOverall = bassOverallEnvelope.processSample (bassSample);
+
+        auto kickBands = kickAnalyzer.processSample (kickSample);
+        auto bassBands = bassAnalyzer.processSample (bassSample);
+
+        std::array<float, numBands> conflictBands {};
+        float maxConflict = 0.0f;
+        for (int b = 0; b < numBands; ++b)
+        {
+            auto c = juce::jmin (kickBands[(size_t) b], bassBands[(size_t) b]);
+            if (c < conflictThreshold) c = 0.0f;
+            conflictBands[(size_t) b] = c;
+            maxConflict = juce::jmax (maxConflict, c);
+        }
 
         if (--samplesUntilNextHistoryPoint <= 0)
         {
             samplesUntilNextHistoryPoint = samplesPerHistoryPoint;
 
             const juce::SpinLock::ScopedLockType lock (snapshotLock);
-            snapshot.kick[(size_t) snapshot.writePos] = kickEnv;
-            snapshot.bass[(size_t) snapshot.writePos] = bassEnv;
+            snapshot.kick[(size_t) snapshot.writePos] = kickEnvOverall;
+            snapshot.bass[(size_t) snapshot.writePos] = bassEnvOverall;
+            snapshot.conflict[(size_t) snapshot.writePos] = maxConflict;
+            snapshot.conflictPerBand[(size_t) snapshot.writePos] = conflictBands;
             snapshot.writePos = (snapshot.writePos + 1) % historySize;
         }
     }
 
-    // Detecta si el sidechain esta realmente conectado (evita mostrar una
-    // linea plana confusa sin explicacion cuando el usuario olvido enrutarlo)
     sidechainActivitySmoothed = juce::jmax (sidechainActivitySmoothed * 0.999f, sidechainActivityThisBlock);
     {
         const juce::SpinLock::ScopedLockType lock (snapshotLock);
         snapshot.sidechainConnected = (numSideChannels > 0) && (sidechainActivitySmoothed > 0.0001f);
     }
 
-    // ETAPA 1: el audio pasa SIN MODIFICAR. Solo se analiza.
     juce::ignoreUnused (buffer);
 }
 

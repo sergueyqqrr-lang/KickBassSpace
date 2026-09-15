@@ -3,14 +3,15 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 #include "DSP/EnvelopeFollower.h"
+#include "DSP/MultibandEnergyAnalyzer.h"
 
 /**
-    ETAPA 1 del plan Kick/Bass Space:
-    - Bus de sidechain para el bajo (entrada separada del kick).
-    - Detectores de envolvente para kick y bass.
-    - El audio pasa SIN MODIFICAR -- esta etapa es puramente de análisis,
-      para poder validar visualmente que la detección funciona antes de
-      procesar nada (evita repetir el problema de construir "a ciegas").
+    ETAPA 2 del plan Kick/Bass Space:
+    - Etapa 1 (ya lista): bus de sidechain + envolventes generales de kick/bass.
+    - Etapa 2 (esta): divide ambas señales en 4 bandas de frecuencia relevantes
+      y calcula, banda por banda, dónde EXISTE solapamiento real (cuando
+      ambas señales tienen energía significativa al mismo tiempo).
+    - El audio sigue pasando SIN MODIFICAR -- todavía es solo análisis.
 */
 class KickBassSpaceAudioProcessor : public juce::AudioProcessor
 {
@@ -43,38 +44,36 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
-    // --- Datos para la GUI ---
-    // Historial reciente de envolvente (kick y bass) para dibujar en pantalla.
-    // Tamaño fijo: ~4 segundos de historial a ~100 puntos/seg.
     static constexpr int historySize = 400;
     static constexpr float historyRateHz = 100.0f;
+    static constexpr int numBands = MultibandEnergyAnalyzer::numBands;
 
     struct EnvelopeSnapshot
     {
         std::array<float, historySize> kick {};
         std::array<float, historySize> bass {};
+        std::array<float, historySize> conflict {};          // conflicto total (max entre bandas)
+        std::array<std::array<float, numBands>, historySize> conflictPerBand {};
         int writePos = 0;
         bool sidechainConnected = false;
     };
 
-    // Lectura segura para la GUI (copia atomica simple protegida por flag)
     void getEnvelopeSnapshot (EnvelopeSnapshot& outSnapshot) const;
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    EnvelopeFollower kickEnvelope, bassEnvelope;
+    MultibandEnergyAnalyzer kickAnalyzer, bassAnalyzer;
+    EnvelopeFollower kickOverallEnvelope, bassOverallEnvelope;
 
     EnvelopeSnapshot snapshot;
     mutable juce::SpinLock snapshotLock;
 
     int samplesUntilNextHistoryPoint = 0;
-    int samplesPerHistoryPoint = 441; // se recalcula en prepareToPlay
+    int samplesPerHistoryPoint = 441;
 
     double currentSampleRate = 44100.0;
 
-    // Para detectar si realmente hay señal en el sidechain (y avisar al usuario
-    // si no está conectado, en vez de mostrar una línea plana confusa)
     float sidechainActivitySmoothed = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KickBassSpaceAudioProcessor)

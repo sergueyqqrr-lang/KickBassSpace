@@ -18,7 +18,7 @@ private:
     SpaceLookAndFeel spaceLookAndFeel;
 
     juce::Label titleLabel { {}, "KICK BASS SPACE" };
-    juce::Label stageLabel { {}, "Etapa 1: Analisis (el audio no se modifica todavia)" };
+        juce::Label stageLabel { {}, "Etapa 2: Deteccion de conflicto (el audio no se modifica todavia)" };
 
     EnvelopeDisplay envelopeDisplay;
 

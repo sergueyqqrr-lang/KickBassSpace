@@ -36,9 +36,9 @@ KickBassSpaceAudioProcessorEditor::KickBassSpaceAudioProcessorEditor (KickBassSp
     attackAttach = std::make_unique<APVTS::SliderAttachment> (p.apvts, "attackMs", attackSlider);
     releaseAttach = std::make_unique<APVTS::SliderAttachment> (p.apvts, "releaseMs", releaseSlider);
 
-    setResizable (true, true);
-    setResizeLimits (700, 420, 1400, 900);
-    setSize (900, 560);
+       setResizable (true, true);
+    setResizeLimits (700, 480, 1400, 900);
+    setSize (900, 620);
 }
 
 KickBassSpaceAudioProcessorEditor::~KickBassSpaceAudioProcessorEditor()

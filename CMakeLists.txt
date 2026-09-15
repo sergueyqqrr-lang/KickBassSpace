@@ -39,6 +39,7 @@ target_sources(KickBassSpace PRIVATE
     Source/PluginEditor.cpp
     Source/PluginEditor.h
     Source/DSP/EnvelopeFollower.h
+    Source/DSP/MultibandEnergyAnalyzer.h
     Source/GUI/LookAndFeel.cpp
     Source/GUI/LookAndFeel.h
     Source/GUI/EnvelopeDisplay.cpp
